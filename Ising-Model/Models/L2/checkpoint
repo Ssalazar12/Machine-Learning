@@ -1,0 +1,2 @@
+model_checkpoint_path: "/Users/rasputin/Desktop/Uni/Tesis/Ising_NN/Models/L2/ising50_1.ckpt"
+all_model_checkpoint_paths: "/Users/rasputin/Desktop/Uni/Tesis/Ising_NN/Models/L2/ising50_1.ckpt"
