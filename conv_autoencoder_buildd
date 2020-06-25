@@ -1,0 +1,216 @@
+# FUNCTIONS---------------------------------------------------------
+
+# convolutional 1d transpose becaus tf has not implemented it yet
+class Conv1DTranspose(tf.keras.layers.Layer):
+    def __init__(self, filters, kernel_size, strides=1, padding='valid', name=None, activation=None, **kwargs):
+        super().__init__(**kwargs)
+        self.conv2dtranspose = tf.keras.layers.Conv2DTranspose(
+          filters, (kernel_size, 1), (strides, 1), padding, name=name, activation=None
+        )
+        self.kernel_size = kernel_size
+        self.filters = filters
+
+    def call(self, x):
+        x = tf.expand_dims(x, axis=2)
+        x = self.conv2dtranspose(x)
+        x = tf.squeeze(x, axis=2)
+        return x
+    
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({
+            'kernel_size': self.kernel_size,
+            'filters': self.filters
+        })
+        return config
+
+
+
+def build_autoencoder(input_dim,encoder_conv_filters, encoder_conv_kernel_size, encoder_conv_strides,
+                      decoder_conv_t_filters, decoder_conv_t_kernel_size, decoder_conv_t_strides,
+                      use_batch_norm, use_dropout):
+    
+    # builds a convolutional autoencoder according to the lists provided as arguments and returns the formed
+    # untrained graph
+
+    n_layers_encoder = len(encoder_conv_filters)
+    n_layers_decoder = len(decoder_conv_t_filters)
+
+    # encoder
+    encoder_input = Input(shape=input_dim, name='encoder_input')
+    x = encoder_input
+
+    ## Parte convolucional
+    for i in range(n_layers_encoder):
+        conv_layer = Conv1D(
+            filters = encoder_conv_filters[i]
+            , kernel_size = encoder_conv_kernel_size[i]
+            , strides = encoder_conv_strides[i]
+            , padding = 'same'
+            , name = 'encoder_conv_' + str(i)
+        )
+
+        x = conv_layer(x)
+        x = LeakyReLU()(x)
+
+        if use_batch_norm:
+            x = BatchNormalization()(x)
+
+        if use_dropout:
+            x = Dropout(rate = 0.25)(x)
+
+    ## Parte central
+    shape_before_flattening = x.get_shape().as_list()[1:]
+
+    feature_extractor_output = Flatten()(x)
+    x = feature_extractor_output
+    encoder_output= Dense(z_dim, name='encoder_output')(x)
+
+    encoder = Model(encoder_input, encoder_output)
+
+    print("La última capa del encoder tiene la siguiente forma: {}".format(shape_before_flattening))
+
+
+    # decoder
+    decoder_input = Input(shape=(z_dim,), name='decoder_input')
+
+    x = Dense(np.prod(shape_before_flattening))(decoder_input)
+    x = Reshape(shape_before_flattening)(x)
+
+    for i in range(n_layers_decoder):
+        conv_t_layer = Conv1DTranspose(
+            filters = decoder_conv_t_filters[i]
+            , kernel_size = decoder_conv_t_kernel_size[i]
+            , strides = decoder_conv_t_strides[i]
+            , padding = 'same'
+            , name = 'decoder_conv_t_' + str(i)
+            )
+
+        x = conv_t_layer(x)
+
+        x = LeakyReLU()(x)
+
+        if use_batch_norm:
+            x = BatchNormalization()(x)
+
+        if use_dropout:
+            x = Dropout(rate = 0.5)(x)
+
+    conv_t_layer = Conv1DTranspose(
+        filters = 3
+        , kernel_size = 1
+        , strides = 1
+        , padding = 'same'
+        , name = 'decoder_conv_t_final'
+        , activation = "lineal"
+        )
+    x = conv_t_layer(x)
+
+    decoder_output = x
+
+    decoder = Model(decoder_input, decoder_output)
+
+    model_input = encoder_input
+    model_output = decoder(encoder_output)
+    autoenc = Model(model_input, model_output)
+
+    return autoenc
+    
+# EVALUATION---------------------------------------------------------
+    
+# autoencoder parameters
+z_dim = 6
+DROPOUT_RATE=0.15
+LEARNING_RATE = 0.00025
+BATCH_SIZE = 32
+INITIAL_EPOCH = 0
+EPOCHS = 500
+
+input_dimension = (90,3)
+encoder_convolutional_filters = [16,32]
+encoder_convolutional_kernel_size = [7,3]
+encoder_convolutional_strides = [1,1]
+decoder_convolutional_t_filters = [32,16]
+decoder_convolutional_t_kernel_size = [3,7]
+decoder_convolutional_t_strides = [1,1]
+use_batch_normalization = False
+use_dropout_condition = False
+
+
+
+# clear previous training nodes
+tf.keras.backend.clear_session()
+init_random(1234)
+
+#autoencoder function
+autoencoder = build_autoencoder(input_dimension,encoder_convolutional_filters, encoder_convolutional_kernel_size, encoder_convolutional_strides,
+                      decoder_convolutional_t_filters, decoder_convolutional_t_kernel_size, decoder_convolutional_t_strides,
+                      use_batch_normalization, use_dropout_condition)
+
+autoencoder.summary()
+
+
+optimizer = Adam(lr=LEARNING_RATE)
+autoencoder.compile(optimizer=optimizer, loss = MeanSquaredError())
+# save only the best model
+checkpoint = ModelCheckpoint(weights_name, save_weights_only = True,
+                             save_best_only=True, verbose=1)
+
+history = autoencoder.fit(     
+    scaled_training_tensor
+    , scaled_training_tensor
+    , batch_size = BATCH_SIZE
+    , shuffle = True
+    , epochs = EPOCHS
+    , initial_epoch = INITIAL_EPOCH
+    , validation_data= (scaled_test_tensor, scaled_test_tensor)
+    , callbacks=[checkpoint]
+)
+
+
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs = range(len(loss))
+
+print('min and max training loss')
+print(min(loss), max(loss))
+print(np.argmax(loss))
+print(np.argmin(loss))
+
+print('min and max validation loss')
+print(min(val_loss), max(val_loss))
+print(np.argmax(val_loss))
+print(np.argmin(val_loss))
+
+plt.figure(figsize=(11,7))
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.ylim(0,1)
+plt.legend()
+plt.show()
+
+
+# save autoencoder architecture json arq_name 
+autoencoder_json = autoencoder.to_json()
+with open(arq_name, "w") as json_file:
+    json_file.write(autoencoder_json)
+    
+    
+ # LOAD AFTER SAVING---------------------------------------------------------
+    
+LEARNING_RATE = 0.00025
+
+# cargamos el autoencoder
+# load autoencoder architecture
+json_file = open("autoencoder_arq_learning_025.json", 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+autoencoder = model_from_json(loaded_model_json,custom_objects={'Conv1DTranspose': Conv1DTranspose})
+encoder = Model(autoencoder.input, autoencoder.layers[-2].output)
+
+
+autoencoder.load_weights('weights_learning_rate_025.h5')
+optimizer = Adam(lr=LEARNING_RATE)
+autoencoder.compile(optimizer=optimizer, loss = MeanSquaredError())
